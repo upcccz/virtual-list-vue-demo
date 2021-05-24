@@ -36,16 +36,22 @@ export default {
     },
     itemSizeGetter: {
       type: Function
+    },
+    estimatedItemSize: {
+      type: Number,
+      default: 30
     }
   },
   computed: {
     contentHeight() {
-      const { data, itemSizeGetter } = this;
-      let total = 0;
-      for (let i = 0, j = data.length; i < j; i++) {
-        total += itemSizeGetter.call(null, data[i], i);
+      const { data, lastMeasuredIndex, estimatedItemSize } = this;
+      let itemCount = data.length;
+      if (lastMeasuredIndex >= 0) {
+        const lastMeasuredSizeAndOffset = this.getLastMeasuredSizeAndOffset();
+        return lastMeasuredSizeAndOffset.offset + lastMeasuredSizeAndOffset.size + (itemCount - 1 - lastMeasuredIndex) * estimatedItemSize;
+      } else {
+        return itemCount * estimatedItemSize;
       }
-      return total;
     }
   },
   mounted () {
@@ -54,43 +60,51 @@ export default {
 
   data () {
     return {
-      visibleData: []
+      visibleData: [],
+      lastMeasuredIndex: -1,
+      startIndex: 0,
+      sizeAndOffsetCahce: {},
     }
   },
 
   methods: {
-    getItemSizeAndOffset(index) {
-    	const { data, itemSizeGetter } = this;
-      let total = 0;
-      for (let i = 0, j = Math.min(index, data.length - 1); i <= j; i++) {
-        const size = itemSizeGetter.call(null, data[i], i);
-        
-        if (i === j) {
-          return {
-            offset: total,
-            size
-          };
-        }
-        total += size;
-      }
-
-      return {
-        offset: 0,
-        size: 0
-      };
+    getLastMeasuredSizeAndOffset() {
+      return this.lastMeasuredIndex >= 0 ? this.sizeAndOffsetCahce[this.lastMeasuredIndex] : { offset: 0, size: 0 };
     },
-    findNearestItemIndex(scrollTop) {
-      const { data, itemSizeGetter } = this;
-      let total = 0;
-      for (let i = 0, j = data.length; i < j; i++) {
-        const size = itemSizeGetter.call(null, data[i], i);
-        total += size;
-        if (total >= scrollTop || i === j -1) {
-          return i;
+    getItemSizeAndOffset(index) {
+      const { lastMeasuredIndex, sizeAndOffsetCahce, data, itemSizeGetter } = this;
+      if (lastMeasuredIndex >= index) {
+        return sizeAndOffsetCahce[index];
+      }
+      let offset = 0;
+      if (lastMeasuredIndex >= 0) {
+        const lastMeasured = sizeAndOffsetCahce[lastMeasuredIndex];
+        if (lastMeasured) {
+          offset = lastMeasured.offset + lastMeasured.size;
         }
       }
+      for (let i = lastMeasuredIndex + 1; i <= index; i++) {
+        const item = data[i];
+        const size = itemSizeGetter.call(null, item, i);
+        sizeAndOffsetCahce[i] = {
+          size,
+          offset
+        };
+        offset += size;
+      }
+      if (index > lastMeasuredIndex) {
+        this.lastMeasuredIndex = index;
+      }
+      return sizeAndOffsetCahce[index];
+    },
 
-      return 0;
+    findNearestItemIndex(scrollTop) {
+      const lastMeasuredOffset = this.getLastMeasuredSizeAndOffset().offset;
+      if (lastMeasuredOffset > scrollTop) {
+        return this.binarySearch(0, this.lastMeasuredIndex, scrollTop);
+      } else {
+        return this.exponentialSearch(scrollTop);
+      }
     },
     updateVisibleData(scrollTop) {
     	scrollTop = scrollTop || 0;
@@ -104,7 +118,40 @@ export default {
       const scrollTop = this.$el.scrollTop
       this.updateVisibleData(scrollTop)
     },
-    
+    binarySearch(low, high, offset) {
+      let index;
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        const middleOffset = this.getItemSizeAndOffset(middle).offset;
+        if (middleOffset === offset) {
+          index = middle;
+          break;
+        } else if (middleOffset > offset) {
+          high = middle - 1;
+        } else {
+          low = middle + 1;
+        }
+      }
+
+      if (low > 0) {
+        index = low - 1;
+      }
+
+      if (typeof index === 'undefined') {
+        index = 0;
+      }
+
+      return index;
+    },
+    exponentialSearch(scrollTop) {
+      let bound = 1;
+      const data = this.data;
+      const start = this.lastMeasuredIndex >= 0 ? this.lastMeasuredIndex : 0;
+      while (start + bound < data.length && this.getItemSizeAndOffset(start + bound).offset < scrollTop) {
+        bound = bound * 2;
+      }
+      return this.binarySearch(start + Math.floor(bound / 2), Math.min(start + bound, data.length-1), scrollTop);
+    }
   }
 }
 </script>
